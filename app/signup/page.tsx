@@ -844,12 +844,12 @@ const styles: Record<string, React.CSSProperties> = {
   smallNote: { fontSize: 12, color: '#6b7280', marginTop: 4 },
   inlineLink: { color: '#b7280f', fontWeight: 800, textDecoration: 'none' },
   footer: {
-    width: '100%',
-    maxWidth: 720,
-    textAlign: 'centre',
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.8)',
-    marginTop: 8,
+  width: '100%',
+  maxWidth: 720,
+  textAlign: 'center',
+  fontSize: 12,
+  color: 'rgba(255,255,255,0.8)',
+  marginTop: 8,
   },
   loadingWrap: {
     minHeight: '100vh',

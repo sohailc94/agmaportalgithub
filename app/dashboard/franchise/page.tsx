@@ -25,7 +25,13 @@ type ClassRow = {
   day_of_week: number | null;
   start_time: string | null;
   end_time: string | null;
-  location: string | null;
+
+  // ✅ NEW: split location fields
+  centre_name: string | null;
+  centre_address: string | null;
+  centre_postcode: string | null;
+
+  // Keep existing flags
   is_active: boolean | null;
   primary_instructor_id: string | null;
 };
@@ -227,13 +233,17 @@ function safeLowerEmail(v: string) {
 }
 
 function makeToken(len = 48) {
-  // url-safe-ish token using browser crypto
   const bytes = new Uint8Array(Math.ceil(len / 2));
   crypto.getRandomValues(bytes);
   return Array.from(bytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('')
     .slice(0, len);
+}
+
+function locationDisplay(c: Pick<ClassRow, 'centre_name' | 'centre_address' | 'centre_postcode'>) {
+  const parts = [c.centre_name, c.centre_address, c.centre_postcode].map(x => (x || '').trim()).filter(Boolean);
+  return parts.length ? parts.join(', ') : 'No location';
 }
 
 /* =========================
@@ -252,32 +262,31 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
   const [studentRowsById, setStudentRowsById] = useState<Map<string, StudentRow>>(new Map());
 
   const [belts, setBelts] = useState<Belt[]>([]);
-
-  // INVITES
   const [invites, setInvites] = useState<InstructorInvite[]>([]);
-
-  // Search students (top 5)
   const [studentQuery, setStudentQuery] = useState('');
-
-  // Modal: create class
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  // Modal: invite instructor
   const [showInviteInstructorModal, setShowInviteInstructorModal] = useState(false);
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviting, setInviting] = useState(false);
 
-  // Defaults requested
+  // ✅ Defaults
   const DEFAULT_CLASS_NAME = 'Shirley - Infants';
-  const DEFAULT_LOCATION = 'Tauntons College, Hill Ln, Southampton SO15 5RL';
+  const DEFAULT_CENTRE_NAME = 'Tauntons College';
+  const DEFAULT_CENTRE_ADDRESS = 'Hill Ln, Southampton';
+  const DEFAULT_CENTRE_POSTCODE = 'SO15 5RL';
 
   // Create class form
   const [name, setName] = useState(DEFAULT_CLASS_NAME);
-  const [dayOfWeek, setDayOfWeek] = useState<number>(1); // Monday
+  const [dayOfWeek, setDayOfWeek] = useState<number>(1);
   const [startTime, setStartTime] = useState('17:00');
   const [endTime, setEndTime] = useState('17:30');
-  const [location, setLocation] = useState(DEFAULT_LOCATION);
+
+  const [centreName, setCentreName] = useState(DEFAULT_CENTRE_NAME);
+  const [centreAddress, setCentreAddress] = useState(DEFAULT_CENTRE_ADDRESS);
+  const [centrePostcode, setCentrePostcode] = useState(DEFAULT_CENTRE_POSTCODE);
+
   const [isActive, setIsActive] = useState(true);
   const [primaryInstructorId, setPrimaryInstructorId] = useState<string>('');
 
@@ -288,18 +297,19 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
     day_of_week: number;
     start_time: string;
     end_time: string;
-    location: string;
+    centre_name: string;
+    centre_address: string;
+    centre_postcode: string;
     is_active: boolean;
     primary_instructor_id: string;
   } | null>(null);
 
-  // Class members panel
   const [selectedClassId, setSelectedClassId] = useState<string>('');
 
-  // Student modal
+  // Student modal (unchanged)
   const [showStudentModal, setShowStudentModal] = useState(false);
-  const [selectedStudentId, setSelectedStudentId] = useState<string>(''); // students.id
-  const [selectedStudentUserId, setSelectedStudentUserId] = useState<string>(''); // profiles.id (may be empty)
+  const [selectedStudentId, setSelectedStudentId] = useState<string>('');
+  const [selectedStudentUserId, setSelectedStudentUserId] = useState<string>('');
   const [studentEmail, setStudentEmail] = useState<string>('');
   const [studentFullName, setStudentFullName] = useState<string>('');
 
@@ -371,21 +381,18 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
     return matches.slice(0, 5);
   }, [students, studentQuery]);
 
-  // ---- INVITE STATUS MAP (by email) ----
   const inviteStatusByEmail = useMemo(() => {
     const m = new Map<string, InstructorInvite['status']>();
     for (const inv of invites) m.set(safeLowerEmail(inv.email), inv.status);
     return m;
   }, [invites]);
 
-  // Active instructors list
   const activeInstructors = useMemo(() => {
     const list = [...instructors];
     list.sort((a, b) => (a.full_name || a.email || '').localeCompare(b.full_name || b.email || '', 'en', { sensitivity: 'base' }));
     return list;
   }, [instructors]);
 
-  // Assignable instructors (not inactive in invites)
   const assignableInstructors = useMemo(() => {
     return activeInstructors.filter(i => {
       const email = safeLowerEmail(i.email || '');
@@ -413,16 +420,11 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
 
   const currentBelt = useMemo(() => {
     if (!beltHistory.length) return null;
-    const sorted = [...beltHistory].sort((a, b) => {
-      const da = a.awarded_at || '0000-00-00';
-      const db = b.awarded_at || '0000-00-00';
-      return db.localeCompare(da);
-    });
+    const sorted = [...beltHistory].sort((a, b) => (b.awarded_at || '').localeCompare(a.awarded_at || ''));
     const top = sorted[0];
     return top ? beltsById.get(top.belt_id) ?? null : null;
   }, [beltHistory, beltsById]);
 
-  // Preview string requested: "Monday - Shirley - Infants"
   const createPreview = useMemo(() => {
     const d = dayLabelLong(dayOfWeek);
     const n = (name || '').trim() || DEFAULT_CLASS_NAME;
@@ -447,7 +449,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       return;
     }
 
-    // Franchise
     const { data: fr, error: frErr } = await supabase
       .from('franchises')
       .select('id, name')
@@ -460,7 +461,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       return;
     }
 
-    // Instructors (role-based)
     const { data: ins, error: insErr } = await supabase
       .from('profiles')
       .select('id, full_name, email')
@@ -474,7 +474,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       return;
     }
 
-    // Instructor invites
     const { data: inv, error: invErr } = await supabase
       .from('instructor_invites')
       .select('id, franchise_id, invited_by, email, full_name, status, token, created_at, completed_at')
@@ -493,10 +492,10 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       setInvites((inv || []) as InstructorInvite[]);
     }
 
-    // Classes (THIS is what powers the dashboard)
+    // ✅ Classes now select split location fields
     const { data: cl, error: clErr } = await supabase
       .from('classes')
-      .select('id, name, day_of_week, start_time, end_time, location, is_active, primary_instructor_id')
+      .select('id, name, day_of_week, start_time, end_time, centre_name, centre_address, centre_postcode, is_active, primary_instructor_id')
       .eq('franchise_id', franchiseId)
       .order('day_of_week', { ascending: true })
       .order('start_time', { ascending: true });
@@ -507,7 +506,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       return;
     }
 
-    // Belts (optional)
     const { data: bl, error: blErr } = await supabase
       .from('belts')
       .select('id, name, sort_order, is_active')
@@ -526,7 +524,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       setBelts((bl || []) as Belt[]);
     }
 
-    // Students
     const { data: st, error: stErr } = await supabase
       .from('students')
       .select(
@@ -543,30 +540,22 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
 
     const stRows = (st || []) as StudentRow[];
 
-    // Profiles for those students (email/full_name) — ONLY if user_id exists
     const userIds = stRows.map(x => x.user_id).filter(Boolean) as string[];
     const profilesById = new Map<string, { email: string; full_name: string }>();
 
     if (userIds.length) {
       const { data: sp, error: spErr } = await supabase.from('profiles').select('id, email, full_name').in('id', userIds);
-
       if (!spErr && sp) {
-        for (const p of sp as any[]) {
-          profilesById.set(p.id, { email: p.email ?? '', full_name: p.full_name ?? '' });
-        }
+        for (const p of sp as any[]) profilesById.set(p.id, { email: p.email ?? '', full_name: p.full_name ?? '' });
       }
     }
 
-    // Include ALL students (don’t filter by user_id)
     const display: StudentDisplay[] = stRows.map(s => {
       const prof = s.user_id ? profilesById.get(s.user_id) : undefined;
-
       const fallbackName = `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim();
       const guardianName = (s.guardian_name ?? '').trim();
-
       const name = (prof?.full_name?.trim() || fallbackName || guardianName || '—').trim();
       const email = (prof?.email?.trim() || (s.guardian_email ?? '').trim() || '').trim();
-
       return {
         id: s.id,
         user_id: s.user_id ?? null,
@@ -586,7 +575,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
     setStudents(display);
     setStudentRowsById(mapById);
 
-    // if selected class no longer exists, clear it
     if (selectedClassId && !(cl || []).some(c => c.id === selectedClassId)) setSelectedClassId('');
 
     setLoading(false);
@@ -600,7 +588,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
   async function createClass() {
     setMsg('');
     setError('');
-
     if (!franchiseId) return;
 
     const cleanName = name.trim();
@@ -613,7 +600,12 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       day_of_week: dayOfWeek,
       start_time: startTime,
       end_time: endTime,
-      location: (location || '').trim() || DEFAULT_LOCATION,
+
+      // ✅ split location fields
+      centre_name: (centreName || '').trim() || DEFAULT_CENTRE_NAME,
+      centre_address: (centreAddress || '').trim() || DEFAULT_CENTRE_ADDRESS,
+      centre_postcode: (centrePostcode || '').trim() || DEFAULT_CENTRE_POSTCODE,
+
       is_active: isActive,
       primary_instructor_id: primaryInstructorId,
     };
@@ -624,9 +616,11 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
     setMsg('Class created ✅');
     setShowCreateModal(false);
 
-    // reset to requested defaults
     setName(DEFAULT_CLASS_NAME);
-    setLocation(DEFAULT_LOCATION);
+    setCentreName(DEFAULT_CENTRE_NAME);
+    setCentreAddress(DEFAULT_CENTRE_ADDRESS);
+    setCentrePostcode(DEFAULT_CENTRE_POSTCODE);
+
     setPrimaryInstructorId('');
     setDayOfWeek(1);
     setStartTime('17:00');
@@ -643,7 +637,11 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       day_of_week: c.day_of_week ?? 1,
       start_time: String(c.start_time ?? '17:00').slice(0, 5),
       end_time: String(c.end_time ?? '17:30').slice(0, 5),
-      location: c.location ?? DEFAULT_LOCATION,
+
+      centre_name: c.centre_name ?? DEFAULT_CENTRE_NAME,
+      centre_address: c.centre_address ?? DEFAULT_CENTRE_ADDRESS,
+      centre_postcode: c.centre_postcode ?? DEFAULT_CENTRE_POSTCODE,
+
       is_active: Boolean(c.is_active ?? true),
       primary_instructor_id: c.primary_instructor_id ?? '',
     });
@@ -671,7 +669,11 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
         day_of_week: edit.day_of_week,
         start_time: edit.start_time,
         end_time: edit.end_time,
-        location: edit.location.trim() || DEFAULT_LOCATION,
+
+        centre_name: (edit.centre_name || '').trim() || DEFAULT_CENTRE_NAME,
+        centre_address: (edit.centre_address || '').trim() || DEFAULT_CENTRE_ADDRESS,
+        centre_postcode: (edit.centre_postcode || '').trim() || DEFAULT_CENTRE_POSTCODE,
+
         is_active: edit.is_active,
         primary_instructor_id: edit.primary_instructor_id,
       })
@@ -684,8 +686,48 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
     await load();
   }
 
+  // ✅ NEW: Soft-delete class (sets is_active=false) and clears students in that class
+  async function deleteClass(classId: string) {
+    setMsg('');
+    setError('');
+    if (!franchiseId) return;
+
+    const c = classes.find(x => x.id === classId);
+    const label = c?.name || 'this class';
+
+    const ok = window.confirm(
+      `Delete "${label}"?\n\nThis will:\n• Mark the class as inactive\n• Remove all students’ Home Class assignment for this class\n\nYou can’t undo this automatically.`
+    );
+    if (!ok) return;
+
+    // 1) Clear home_class_id for any students currently in this class
+    // NOTE: This requires correct students RLS (your recursion error is blocking this today)
+    const { error: clearErr } = await supabase
+      .from('students')
+      .update({ home_class_id: null })
+      .eq('franchise_id', franchiseId)
+      .eq('home_class_id', classId);
+
+    if (clearErr) return setError(clearErr.message);
+
+    // 2) Soft delete class
+    const { error: clsErr } = await supabase
+      .from('classes')
+      .update({ is_active: false })
+      .eq('id', classId)
+      .eq('franchise_id', franchiseId);
+
+    if (clsErr) return setError(clsErr.message);
+
+    // if currently selected, close panel
+    if (selectedClassId === classId) setSelectedClassId('');
+
+    setMsg('Class deleted (set inactive) ✅');
+    await load();
+  }
+
   /**
-   * Invite instructor (name + email), create invite row, then fire GHL webhook.
+   * Invite instructor (same as your original)
    */
   async function inviteInstructor() {
     setMsg('');
@@ -698,7 +740,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
     if (!fullName) return setMsg('Enter instructor name.');
     if (!email || !email.includes('@')) return setMsg('Enter a valid email address.');
 
-    // Don’t invite same email twice if already pending/active
     const existing = invites.find(i => safeLowerEmail(i.email) === email && (i.status === 'pending' || i.status === 'active'));
     if (existing) return setMsg('That email already has an invite (pending or active).');
 
@@ -706,7 +747,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
 
     const token = makeToken(48);
 
-    // 1) Create invite row in Supabase
     const { data: created, error: invErr } = await supabase
       .from('instructor_invites')
       .insert({
@@ -725,7 +765,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       return setError(invErr.message);
     }
 
-    // 2) Fire webhook to GHL
     try {
       const origin = typeof window !== 'undefined' ? window.location.origin : '';
       const registrationUrl = `${origin}/register-instructor?token=${token}`;
@@ -753,7 +792,7 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
       } else {
         setMsg('Invite sent ✅');
       }
-    } catch (e: any) {
+    } catch {
       setMsg('Invite created ✅ (but could not reach GHL — check your connection)');
     }
 
@@ -772,14 +811,11 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
     const email = safeLowerEmail(emailRaw);
     if (!email) return;
 
-    // 1) mark invite inactive if exists
     await supabase.from('instructor_invites').update({ status: 'inactive' }).eq('franchise_id', franchiseId).eq('email', email);
 
-    // 2) if they have a profile currently instructor, demote them
     const target = instructors.find(i => safeLowerEmail(i.email || '') === email);
     if (target?.id) {
       const { error: upProfErr } = await supabase.from('profiles').update({ role: 'student', franchise_id: franchiseId }).eq('id', target.id);
-
       if (upProfErr) return setError(upProfErr.message);
     }
 
@@ -810,7 +846,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
   }
 
   async function loadStudentExtras(studentId: string) {
-    // feedback (optional table)
     const { data: fb, error: fbErr } = await supabase
       .from('feedback_notes')
       .select('id, student_id, note, created_by, created_at')
@@ -820,7 +855,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
 
     if (!fbErr) setFeedbackNotes((fb || []) as FeedbackNote[]);
 
-    // belts history (optional table)
     const { data: sb, error: sbErr } = await supabase
       .from('student_belts')
       .select('id, student_id, belt_id, awarded_at, awarded_by, created_at')
@@ -998,7 +1032,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
         </button>
       </div>
 
-      {/* ACTIVE */}
       <div style={{ fontWeight: 950, marginBottom: 8 }}>Active instructors</div>
       <div style={styles.instructorBox}>
         {activeInstructors.length === 0 ? (
@@ -1029,7 +1062,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
         )}
       </div>
 
-      {/* PENDING */}
       <div style={{ fontWeight: 950, marginTop: 14, marginBottom: 8 }}>Pending invites</div>
       <div style={styles.instructorBox}>
         {pendingInvites.length === 0 ? (
@@ -1053,7 +1085,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
         )}
       </div>
 
-      {/* INACTIVE */}
       <div style={{ fontWeight: 950, marginTop: 14, marginBottom: 8 }}>Inactive instructors</div>
       <div style={styles.instructorBox}>
         {inactiveInvites.length === 0 ? (
@@ -1124,11 +1155,13 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
         </button>
       </div>
 
-      {/* Create preview requested */}
+      {/* Create preview */}
       <div style={styles.previewBox}>
         <div style={{ fontWeight: 950 }}>Preview</div>
         <div style={styles.previewText}>{createPreview}</div>
-        <div style={styles.muted}>Location: {location?.trim() ? location.trim() : DEFAULT_LOCATION}</div>
+        <div style={styles.muted}>
+          Centre: {[centreName, centreAddress, centrePostcode].map(x => (x || '').trim()).filter(Boolean).join(', ') || '—'}
+        </div>
       </div>
 
       {classes.length === 0 ? <div style={styles.muted}>No classes found for this franchise.</div> : null}
@@ -1163,26 +1196,33 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
                       </span>
                     </div>
                     <div style={styles.muted}>
-                      {c.location || 'No location'} · {c.is_active ? 'Active' : 'Inactive'} · Primary:{' '}
+                      {locationDisplay(c)} · {c.is_active ? 'Active' : 'Inactive'} · Primary:{' '}
                       <b style={{ color: '#111827' }}>{instructorLabel(c.primary_instructor_id)}</b> · Students:{' '}
                       <b style={{ color: '#111827' }}>{count}</b>
                       {isSelected ? <span style={{ marginLeft: 8, fontWeight: 900 }}> (open)</span> : null}
                     </div>
                   </button>
 
-                  <button onClick={() => startEdit(c)} style={styles.smallEditBtn}>
-                    Edit
-                  </button>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => startEdit(c)} style={styles.smallEditBtn}>
+                      Edit
+                    </button>
+                    <button onClick={() => deleteClass(c.id)} style={styles.smallDangerBtn}>
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div style={{ display: 'grid', gap: 10 }}>
                   <div style={styles.subTitle}>Edit class</div>
 
-                  {/* Edit preview requested */}
                   <div style={styles.previewBox}>
                     <div style={{ fontWeight: 950 }}>Preview</div>
                     <div style={styles.previewText}>{editPreview}</div>
-                    <div style={styles.muted}>Location: {edit?.location?.trim() ? edit.location.trim() : DEFAULT_LOCATION}</div>
+                    <div style={styles.muted}>
+                      Centre:{' '}
+                      {[edit?.centre_name, edit?.centre_address, edit?.centre_postcode].map(x => (x || '').trim()).filter(Boolean).join(', ') || '—'}
+                    </div>
                   </div>
 
                   <label style={styles.label}>
@@ -1215,13 +1255,36 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
                     </label>
                   </div>
 
+                  {/* ✅ split location fields */}
+                  <div style={styles.grid2}>
+                    <label style={styles.label}>
+                      Centre name
+                      <input
+                        value={edit!.centre_name}
+                        onChange={e => setEdit({ ...edit!, centre_name: e.target.value })}
+                        style={styles.input}
+                        placeholder={DEFAULT_CENTRE_NAME}
+                      />
+                    </label>
+
+                    <label style={styles.label}>
+                      Postcode
+                      <input
+                        value={edit!.centre_postcode}
+                        onChange={e => setEdit({ ...edit!, centre_postcode: e.target.value })}
+                        style={styles.input}
+                        placeholder={DEFAULT_CENTRE_POSTCODE}
+                      />
+                    </label>
+                  </div>
+
                   <label style={styles.label}>
-                    Location
+                    Address
                     <input
-                      value={edit!.location}
-                      onChange={e => setEdit({ ...edit!, location: e.target.value })}
+                      value={edit!.centre_address}
+                      onChange={e => setEdit({ ...edit!, centre_address: e.target.value })}
                       style={styles.input}
-                      placeholder={DEFAULT_LOCATION}
+                      placeholder={DEFAULT_CENTRE_ADDRESS}
                     />
                   </label>
 
@@ -1310,7 +1373,9 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
             <div style={styles.previewBox}>
               <div style={{ fontWeight: 950 }}>Preview</div>
               <div style={styles.previewText}>{createPreview}</div>
-              <div style={styles.muted}>Location: {location?.trim() ? location.trim() : DEFAULT_LOCATION}</div>
+              <div style={styles.muted}>
+                Centre: {[centreName, centreAddress, centrePostcode].map(x => (x || '').trim()).filter(Boolean).join(', ') || '—'}
+              </div>
             </div>
 
             <div style={{ display: 'grid', gap: 10 }}>
@@ -1344,9 +1409,22 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
                 </label>
               </div>
 
+              {/* ✅ split location fields */}
+              <div style={styles.grid2}>
+                <label style={styles.label}>
+                  Centre name
+                  <input value={centreName} onChange={e => setCentreName(e.target.value)} style={styles.input} placeholder={DEFAULT_CENTRE_NAME} />
+                </label>
+
+                <label style={styles.label}>
+                  Postcode
+                  <input value={centrePostcode} onChange={e => setCentrePostcode(e.target.value)} style={styles.input} placeholder={DEFAULT_CENTRE_POSTCODE} />
+                </label>
+              </div>
+
               <label style={styles.label}>
-                Location
-                <input value={location} onChange={e => setLocation(e.target.value)} style={styles.input} placeholder={DEFAULT_LOCATION} />
+                Address
+                <input value={centreAddress} onChange={e => setCentreAddress(e.target.value)} style={styles.input} placeholder={DEFAULT_CENTRE_ADDRESS} />
               </label>
 
               <label style={styles.label}>
@@ -1379,7 +1457,7 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
         </div>
       ) : null}
 
-      {/* STUDENT MODAL */}
+      {/* STUDENT MODAL (unchanged from your original below this point) */}
       {showStudentModal ? (
         <div
           style={styles.modalOverlay}
@@ -1408,7 +1486,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
 
             <div style={styles.divider} />
 
-            {/* STUDENT DETAILS */}
             {(() => {
               const row = selectedStudentId ? studentRowsById.get(selectedStudentId) : null;
               if (!row) return <div style={styles.muted}>Loading student details…</div>;
@@ -1521,7 +1598,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
 
                   <div style={styles.divider} />
 
-                  {/* BELTS */}
                   <div style={styles.sectionTitle}>Belts</div>
                   <div style={styles.muted}>
                     Current belt: <b style={{ color: '#111827' }}>{currentBelt?.name ?? '—'}</b>
@@ -1568,7 +1644,6 @@ function FranchiseOwnerView({ profile }: { profile: Profile }) {
 
                   <div style={styles.divider} />
 
-                  {/* FEEDBACK */}
                   <div style={styles.sectionTitle}>Feedback notes</div>
                   <label style={styles.label}>
                     Add feedback (short note)

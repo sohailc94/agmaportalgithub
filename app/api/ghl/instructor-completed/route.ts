@@ -1,12 +1,23 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY! // server only
-);
+// ---- ENV SAFE GUARDS ----
+const supabaseUrl =
+  process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
 
-// simple shared secret so random people can't hit your webhook
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl) {
+  throw new Error('SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) is required');
+}
+
+if (!serviceRoleKey) {
+  throw new Error('SUPABASE_SERVICE_ROLE_KEY is required');
+}
+
+const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
+
+// ---- Simple shared secret validation ----
 function isValid(req: Request) {
   const secret = req.headers.get('x-agm-secret');
   return secret && secret === process.env.GHL_WEBHOOK_SECRET;
@@ -15,17 +26,16 @@ function isValid(req: Request) {
 export async function POST(req: Request) {
   try {
     if (!isValid(req)) {
-      return NextResponse.json({ error: 'unauthorised' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'unauthorised' },
+        { status: 401 }
+      );
     }
 
     const body = await req.json();
 
-    // Expect these from GHL:
-    // token, email, full_name, phone, address, medical_info, etc
     const token = String(body.token || '').trim();
-    const email = String(body.email || '')
-      .trim()
-      .toLowerCase();
+    const email = String(body.email || '').trim().toLowerCase();
 
     if (!token || !email) {
       return NextResponse.json(
@@ -34,7 +44,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1) Find invite by token
+    // 1️⃣ Find invite by token
     const { data: invite, error: invErr } = await supabaseAdmin
       .from('instructor_invites')
       .select('id, franchise_id, email, status')
@@ -42,14 +52,20 @@ export async function POST(req: Request) {
       .single();
 
     if (invErr || !invite) {
-      return NextResponse.json({ error: 'invite not found' }, { status: 404 });
+      return NextResponse.json(
+        { error: 'invite not found' },
+        { status: 404 }
+      );
     }
 
     if (invite.status === 'inactive') {
-      return NextResponse.json({ error: 'invite inactive' }, { status: 409 });
+      return NextResponse.json(
+        { error: 'invite inactive' },
+        { status: 409 }
+      );
     }
 
-    // 2) Mark invite completed + active
+    // 2️⃣ Mark invite active
     const { error: upInviteErr } = await supabaseAdmin
       .from('instructor_invites')
       .update({
@@ -59,19 +75,24 @@ export async function POST(req: Request) {
       .eq('id', invite.id);
 
     if (upInviteErr) {
-      return NextResponse.json({ error: upInviteErr.message }, { status: 500 });
+      return NextResponse.json(
+        { error: upInviteErr.message },
+        { status: 500 }
+      );
     }
 
-    // 3) OPTIONAL: if a profile already exists for that email, upgrade role to instructor
-    // NOTE: profiles.id must be auth user id (uuid). We can't create auth users from here without extra work.
+    // 3️⃣ If profile exists for that email → upgrade to instructor
     const { data: prof, error: profErr } = await supabaseAdmin
       .from('profiles')
-      .select('id, email')
+      .select('id')
       .eq('email', email)
       .maybeSingle();
 
     if (profErr) {
-      return NextResponse.json({ error: profErr.message }, { status: 500 });
+      return NextResponse.json(
+        { error: profErr.message },
+        { status: 500 }
+      );
     }
 
     if (prof?.id) {
@@ -85,7 +106,10 @@ export async function POST(req: Request) {
         .eq('id', prof.id);
 
       if (upProfErr) {
-        return NextResponse.json({ error: upProfErr.message }, { status: 500 });
+        return NextResponse.json(
+          { error: upProfErr.message },
+          { status: 500 }
+        );
       }
     }
 

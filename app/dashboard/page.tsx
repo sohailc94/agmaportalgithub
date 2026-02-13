@@ -12,7 +12,9 @@ type Profile = {
 function withTimeout<T>(promise: Promise<T>, ms = 10000, label = 'Timed out') {
   return Promise.race([
     promise,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} (${ms}ms)`)), ms)),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} (${ms}ms)`)), ms)
+    ),
   ]);
 }
 
@@ -45,7 +47,13 @@ export default function DashboardIndexPage() {
 
         // 2) profile role
         const profRes = await withTimeout(
-          supabase.from('profiles').select('id, role').eq('id', user.id).maybeSingle(),
+          (async () => {
+            return await supabase
+              .from('profiles')
+              .select('id, role')
+              .eq('id', user.id)
+              .maybeSingle();
+          })(),
           10000,
           'profiles query timed out'
         );
@@ -56,7 +64,6 @@ export default function DashboardIndexPage() {
         if (cancelled) return;
 
         if (!p) {
-          // No profile row exists — send them back to login (or you can create a setup page)
           safeReplace('/');
           return;
         }
@@ -69,9 +76,8 @@ export default function DashboardIndexPage() {
         else if (role === 'instructor') safeReplace('/dashboard/instructor');
         else if (role === 'student') safeReplace('/dashboard/student');
         else if (role === 'parent') safeReplace('/dashboard/parent');
-        else safeReplace('/'); // unknown role -> login
+        else safeReplace('/');
       } catch {
-        // fail closed (avoid loops)
         if (cancelled) return;
         safeReplace('/');
       }
@@ -83,7 +89,14 @@ export default function DashboardIndexPage() {
   }, [router]);
 
   return (
-    <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', fontFamily: 'system-ui' }}>
+    <main
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        placeItems: 'center',
+        fontFamily: 'system-ui',
+      }}
+    >
       <div style={{ padding: 18, borderRadius: 12, border: '1px solid #eee' }}>
         <b>Loading dashboard…</b>
       </div>

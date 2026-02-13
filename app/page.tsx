@@ -105,7 +105,7 @@ export default function LoginPage() {
           </div>
 
           <h1 style={styles.h1}>Log in</h1>
-          <p style={styles.p}>Access your profile, membership details and belt history.</p>
+          <p style={styles.p}>Access your profile X, membership details and belt history.</p>
 
           <div style={styles.form}>
             <label style={styles.label}>

@@ -47,13 +47,7 @@ export default function DashboardIndexPage() {
 
         // 2) profile role
         const profRes = await withTimeout(
-          (async () => {
-            return await supabase
-              .from('profiles')
-              .select('id, role')
-              .eq('id', user.id)
-              .maybeSingle();
-          })(),
+          supabase.from('profiles').select('id, role').eq('id', user.id).maybeSingle() as any,
           10000,
           'profiles query timed out'
         );
@@ -70,12 +64,11 @@ export default function DashboardIndexPage() {
 
         const role = (p as Profile).role ?? null;
 
-        // 3) route by role
+        // 3) route by role (PRIMARY replaces student/parent)
         if (role === 'hq') safeReplace('/dashboard/hq');
         else if (role === 'franchise_owner') safeReplace('/dashboard/franchise');
         else if (role === 'instructor') safeReplace('/dashboard/instructor');
-        else if (role === 'student') safeReplace('/dashboard/student');
-        else if (role === 'parent') safeReplace('/dashboard/parent');
+        else if (role === 'student' || role === 'parent') safeReplace('/dashboard/primary');
         else safeReplace('/');
       } catch {
         if (cancelled) return;

@@ -1032,7 +1032,7 @@ const styles: Record<string, React.CSSProperties> = {
   footer: {
     width: '100%',
     maxWidth: 720,
-    textAlign: 'centre',
+    textAlign: 'center',
     fontSize: 12,
     color: 'rgba(255,255,255,0.8)',
     marginTop: 8,
@@ -1040,7 +1040,7 @@ const styles: Record<string, React.CSSProperties> = {
   loadingWrap: {
     minHeight: '100vh',
     display: 'grid',
-    placeItems: 'centre',
+    placeItems: 'center',
     fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
     background: '#0b0f19',
     color: 'white',

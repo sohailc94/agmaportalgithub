@@ -14,7 +14,12 @@ type ParentForm = {
   fullName: string;
   dob: string; // yyyy-mm-dd
   phone: string;
-  address: string;
+
+  // ✅ UK address fields
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  postcode: string;
 };
 
 type ChildForm = {
@@ -25,6 +30,17 @@ type ChildForm = {
   areaId: string;
   classId: string;
 };
+
+function normaliseUkPostcode(v: string) {
+  const s = String(v || '').toUpperCase().replace(/\s+/g, '').trim();
+  if (s.length <= 3) return s;
+  return `${s.slice(0, s.length - 3)} ${s.slice(-3)}`;
+}
+
+function joinAddress(a: { addressLine1: string; addressLine2: string; city: string; postcode: string }) {
+  // stored as one string for now, but with UK structure. (Later you can store separate columns.)
+  return [a.addressLine1, a.addressLine2, a.city, a.postcode].filter(Boolean).join(', ');
+}
 
 export default function SignupPage() {
   const [loading, setLoading] = useState(true);
@@ -44,7 +60,10 @@ export default function SignupPage() {
     fullName: '',
     dob: '',
     phone: '',
-    address: '',
+    addressLine1: '',
+    addressLine2: '',
+    city: '',
+    postcode: '',
   });
 
   // Child accounts (only used when yes)
@@ -66,7 +85,13 @@ export default function SignupPage() {
   const [studentLastName, setStudentLastName] = useState('');
   const [studentDob, setStudentDob] = useState('');
   const [studentPhone, setStudentPhone] = useState('');
-  const [studentAddress, setStudentAddress] = useState('');
+
+  // ✅ UK address fields for student
+  const [studentAddressLine1, setStudentAddressLine1] = useState('');
+  const [studentAddressLine2, setStudentAddressLine2] = useState('');
+  const [studentCity, setStudentCity] = useState('');
+  const [studentPostcode, setStudentPostcode] = useState('');
+
   const [studentMedicalInfo, setStudentMedicalInfo] = useState('');
   const [studentAreaId, setStudentAreaId] = useState('');
   const [studentClassId, setStudentClassId] = useState('');
@@ -93,11 +118,7 @@ export default function SignupPage() {
         setMsg('');
         setLoading(true);
 
-        const { data: frData, error: frErr } = await supabase
-          .from('franchises')
-          .select('id, name')
-          .order('name');
-
+        const { data: frData, error: frErr } = await supabase.from('franchises').select('id, name').order('name');
         if (frErr) throw frErr;
 
         const { data: clData, error: clErr } = await supabase
@@ -147,7 +168,6 @@ export default function SignupPage() {
 
   // ---------- Submit ----------
   async function submit() {
-    // ✅ prevent double submit + aborted auth locks
     if (submitLock.current) return;
     submitLock.current = true;
     setSaving(true);
@@ -158,23 +178,34 @@ export default function SignupPage() {
       // Parent registering student(s)
       // =========================================================
       if (isParentRegistering === 'yes') {
-        // Parent validation
         if (!parent.email.trim() || !parent.password) throw new Error('Please enter parent email + password.');
         if (!parent.fullName.trim()) throw new Error('Please enter parent/guardian full name.');
         if (!parent.dob) throw new Error('Please enter parent/guardian date of birth.');
         if (!parent.phone.trim()) throw new Error('Please enter parent/guardian phone.');
-        if (!parent.address.trim()) throw new Error('Please enter parent/guardian address.');
 
-        // Children validation
+        // ✅ UK address validation
+        if (!parent.addressLine1.trim()) throw new Error('Please enter address line 1.');
+        if (!parent.city.trim()) throw new Error('Please enter town/city.');
+        if (!parent.postcode.trim()) throw new Error('Please enter postcode.');
+
         if (!children.length) throw new Error('Please add at least one child.');
         for (let i = 0; i < children.length; i++) {
           const c = children[i];
-          if (!c.firstName.trim() || !c.lastName.trim()) throw new Error(`Child ${i + 1}: please enter first + last name.`);
+          if (!c.firstName.trim() || !c.lastName.trim())
+            throw new Error(`Child ${i + 1}: please enter first + last name.`);
           if (!c.dob) throw new Error(`Child ${i + 1}: please enter date of birth.`);
           if (!c.areaId || !c.classId) throw new Error(`Child ${i + 1}: please choose an area and class.`);
           if (!c.medicalInfo.trim())
             throw new Error(`Child ${i + 1}: please enter medical information (use "None" if not applicable).`);
         }
+
+        const parentPostcode = normaliseUkPostcode(parent.postcode);
+        const parentAddressJoined = joinAddress({
+          addressLine1: parent.addressLine1.trim(),
+          addressLine2: parent.addressLine2.trim(),
+          city: parent.city.trim(),
+          postcode: parentPostcode,
+        });
 
         // 1) Create auth user for parent
         const { data: signUp, error: signUpErr } = await supabase.auth.signUp({
@@ -182,7 +213,6 @@ export default function SignupPage() {
           password: parent.password,
           options: { data: { full_name: parent.fullName.trim() } },
         });
-
         if (signUpErr) throw signUpErr;
 
         const user = signUp.user;
@@ -202,11 +232,9 @@ export default function SignupPage() {
           },
           { onConflict: 'id' }
         );
-
         if (parentProfErr) throw new Error(`Parent profile error: ${parentProfErr.message}`);
 
-        // 3) Insert children in students table (no auth users)
-        // NOTE: we set guardian_is_registering true + parent_user_id link
+        // 3) Insert children (no auth users)
         for (const c of children) {
           const { error: childInsertErr } = await supabase.from('students').insert({
             parent_user_id: user.id,
@@ -225,13 +253,14 @@ export default function SignupPage() {
             guardian_relationship: 'Parent/Guardian',
             guardian_email: parent.email.trim(),
             guardian_phone: parent.phone.trim(),
-            guardian_address: parent.address.trim(),
+
+            // ✅ store address in existing column (guardian_address) as structured string
+            guardian_address: parentAddressJoined,
           });
 
           if (childInsertErr) throw new Error(`Student error: ${childInsertErr.message}`);
         }
 
-        // IMPORTANT: your /dashboard router must handle role=parent or you'll loop.
         window.location.href = '/dashboard';
         return;
       }
@@ -243,15 +272,27 @@ export default function SignupPage() {
       if (!studentFirstName.trim() || !studentLastName.trim()) throw new Error('Please enter first + last name.');
       if (!studentAreaId || !studentClassId) throw new Error('Please choose an area and a class.');
       if (!studentPhone.trim()) throw new Error('Please enter your phone number.');
-      if (!studentAddress.trim()) throw new Error('Please enter your address.');
+
+      // ✅ UK address validation
+      if (!studentAddressLine1.trim()) throw new Error('Please enter address line 1.');
+      if (!studentCity.trim()) throw new Error('Please enter town/city.');
+      if (!studentPostcode.trim()) throw new Error('Please enter postcode.');
+
       if (!studentMedicalInfo.trim()) throw new Error('Please enter medical information (use "None" if not applicable).');
+
+      const sPostcode = normaliseUkPostcode(studentPostcode);
+      const studentAddressJoined = joinAddress({
+        addressLine1: studentAddressLine1.trim(),
+        addressLine2: studentAddressLine2.trim(),
+        city: studentCity.trim(),
+        postcode: sPostcode,
+      });
 
       const { data: signUp, error: signUpErr } = await supabase.auth.signUp({
         email: studentEmail.trim(),
         password: studentPassword,
         options: { data: { full_name: `${studentFirstName} ${studentLastName}`.trim() } },
       });
-
       if (signUpErr) throw signUpErr;
 
       const user = signUp.user;
@@ -271,7 +312,6 @@ export default function SignupPage() {
         },
         { onConflict: 'id' }
       );
-
       if (profErr) throw new Error(`Profile error: ${profErr.message}`);
 
       // student row
@@ -285,21 +325,24 @@ export default function SignupPage() {
           dob: studentDob || null,
           status: 'inactive',
           phone: studentPhone.trim(),
-          address: studentAddress.trim(),
+
+          // ✅ store address as structured string for now in existing column
+          address: studentAddressJoined,
+
           medical_info: studentMedicalInfo.trim(),
           guardian_is_registering: false,
           avatar_url: null,
         },
         { onConflict: 'user_id' }
       );
-
       if (studErr) throw new Error(`Student error: ${studErr.message}`);
 
       window.location.href = '/dashboard';
     } catch (e: any) {
-      // Supabase internal lock aborts often show like this
       if (e?.name === 'AbortError') {
-        setMsg('AbortError: request was interrupted (usually double-submit or redirect loop). Try once, and check /dashboard routing for role=parent.');
+        setMsg(
+          'AbortError: request was interrupted (usually double-submit or redirect loop). Try once, and check /dashboard routing.'
+        );
       } else {
         setMsg(e?.message || 'Something went wrong.');
       }
@@ -370,6 +413,7 @@ export default function SignupPage() {
                     style={styles.input}
                     placeholder="parent@example.com"
                     autoComplete="email"
+                    inputMode="email"
                   />
                 </label>
 
@@ -392,6 +436,7 @@ export default function SignupPage() {
                     onChange={e => setParent(p => ({ ...p, fullName: e.target.value }))}
                     style={styles.input}
                     placeholder="Full name"
+                    autoComplete="name"
                   />
                 </label>
 
@@ -401,7 +446,8 @@ export default function SignupPage() {
                     type="date"
                     value={parent.dob}
                     onChange={e => setParent(p => ({ ...p, dob: e.target.value }))}
-                    style={styles.input}
+                    style={styles.dateInput}
+                    autoComplete="bday"
                   />
                 </label>
 
@@ -412,18 +458,62 @@ export default function SignupPage() {
                     onChange={e => setParent(p => ({ ...p, phone: e.target.value }))}
                     style={styles.input}
                     placeholder="07..."
+                    autoComplete="tel"
+                    inputMode="tel"
+                  />
+                </label>
+
+                {/* ✅ UK Address (browser autofill friendly) */}
+                <div style={styles.sectionTitle}>Address</div>
+
+                <label style={styles.label}>
+                  Address line 1
+                  <input
+                    value={parent.addressLine1}
+                    onChange={e => setParent(p => ({ ...p, addressLine1: e.target.value }))}
+                    style={styles.input}
+                    placeholder="House number and street"
+                    autoComplete="address-line1"
                   />
                 </label>
 
                 <label style={styles.label}>
-                  Address
+                  Address line 2 (optional)
                   <input
-                    value={parent.address}
-                    onChange={e => setParent(p => ({ ...p, address: e.target.value }))}
+                    value={parent.addressLine2}
+                    onChange={e => setParent(p => ({ ...p, addressLine2: e.target.value }))}
                     style={styles.input}
-                    placeholder="Address"
+                    placeholder="Flat, building, etc."
+                    autoComplete="address-line2"
                   />
                 </label>
+
+                <div style={styles.twoColStack}>
+                  <label style={styles.label}>
+                    Town / City
+                    <input
+                      value={parent.city}
+                      onChange={e => setParent(p => ({ ...p, city: e.target.value }))}
+                      style={styles.input}
+                      placeholder="Town / City"
+                      autoComplete="address-level2"
+                    />
+                  </label>
+
+                  <label style={styles.label}>
+                    Postcode
+                    <input
+                      value={parent.postcode}
+                      onChange={e => setParent(p => ({ ...p, postcode: normaliseUkPostcode(e.target.value) }))}
+                      onBlur={() => setParent(p => ({ ...p, postcode: normaliseUkPostcode(p.postcode) }))}
+                      style={styles.input}
+                      placeholder="SO15 4AE"
+                      autoComplete="postal-code"
+                      inputMode="text"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
 
                 <div style={styles.hr} />
 
@@ -443,7 +533,7 @@ export default function SignupPage() {
                         ) : null}
                       </div>
 
-                      <div style={styles.twoCol}>
+                      <div style={styles.twoColStack}>
                         <label style={styles.label}>
                           First name
                           <input
@@ -456,6 +546,7 @@ export default function SignupPage() {
                               })
                             }
                             style={styles.input}
+                            autoComplete="given-name"
                           />
                         </label>
 
@@ -471,6 +562,7 @@ export default function SignupPage() {
                               })
                             }
                             style={styles.input}
+                            autoComplete="family-name"
                           />
                         </label>
                       </div>
@@ -487,7 +579,8 @@ export default function SignupPage() {
                               return next;
                             })
                           }
-                          style={styles.input}
+                          style={styles.dateInput}
+                          autoComplete="bday"
                         />
                       </label>
 
@@ -507,7 +600,7 @@ export default function SignupPage() {
                         />
                       </label>
 
-                      <div style={styles.twoCol}>
+                      <div style={styles.twoColStack}>
                         <label style={styles.label}>
                           Area
                           <select
@@ -584,6 +677,7 @@ export default function SignupPage() {
                     style={styles.input}
                     placeholder="you@example.com"
                     autoComplete="email"
+                    inputMode="email"
                   />
                 </label>
 
@@ -603,31 +697,94 @@ export default function SignupPage() {
 
                 <div style={styles.sectionTitle}>Student details</div>
 
-                <div style={styles.twoCol}>
+                <div style={styles.twoColStack}>
                   <label style={styles.label}>
                     First name
-                    <input value={studentFirstName} onChange={e => setStudentFirstName(e.target.value)} style={styles.input} />
+                    <input
+                      value={studentFirstName}
+                      onChange={e => setStudentFirstName(e.target.value)}
+                      style={styles.input}
+                      autoComplete="given-name"
+                    />
                   </label>
                   <label style={styles.label}>
                     Last name
-                    <input value={studentLastName} onChange={e => setStudentLastName(e.target.value)} style={styles.input} />
+                    <input
+                      value={studentLastName}
+                      onChange={e => setStudentLastName(e.target.value)}
+                      style={styles.input}
+                      autoComplete="family-name"
+                    />
                   </label>
                 </div>
 
                 <label style={styles.label}>
                   Date of birth (optional)
-                  <input type="date" value={studentDob} onChange={e => setStudentDob(e.target.value)} style={styles.input} />
+                  <input type="date" value={studentDob} onChange={e => setStudentDob(e.target.value)} style={styles.dateInput} autoComplete="bday" />
                 </label>
 
                 <label style={styles.label}>
                   Phone
-                  <input value={studentPhone} onChange={e => setStudentPhone(e.target.value)} style={styles.input} placeholder="07..." />
+                  <input
+                    value={studentPhone}
+                    onChange={e => setStudentPhone(e.target.value)}
+                    style={styles.input}
+                    placeholder="07..."
+                    autoComplete="tel"
+                    inputMode="tel"
+                  />
+                </label>
+
+                {/* ✅ UK Address */}
+                <div style={styles.sectionTitle}>Address</div>
+
+                <label style={styles.label}>
+                  Address line 1
+                  <input
+                    value={studentAddressLine1}
+                    onChange={e => setStudentAddressLine1(e.target.value)}
+                    style={styles.input}
+                    placeholder="House number and street"
+                    autoComplete="address-line1"
+                  />
                 </label>
 
                 <label style={styles.label}>
-                  Address
-                  <input value={studentAddress} onChange={e => setStudentAddress(e.target.value)} style={styles.input} placeholder="Address" />
+                  Address line 2 (optional)
+                  <input
+                    value={studentAddressLine2}
+                    onChange={e => setStudentAddressLine2(e.target.value)}
+                    style={styles.input}
+                    placeholder="Flat, building, etc."
+                    autoComplete="address-line2"
+                  />
                 </label>
+
+                <div style={styles.twoColStack}>
+                  <label style={styles.label}>
+                    Town / City
+                    <input
+                      value={studentCity}
+                      onChange={e => setStudentCity(e.target.value)}
+                      style={styles.input}
+                      placeholder="Town / City"
+                      autoComplete="address-level2"
+                    />
+                  </label>
+
+                  <label style={styles.label}>
+                    Postcode
+                    <input
+                      value={studentPostcode}
+                      onChange={e => setStudentPostcode(normaliseUkPostcode(e.target.value))}
+                      onBlur={() => setStudentPostcode(p => normaliseUkPostcode(p))}
+                      style={styles.input}
+                      placeholder="SO15 4AE"
+                      autoComplete="postal-code"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
 
                 <label style={styles.label}>
                   Medical information (required)
@@ -768,15 +925,33 @@ const styles: Record<string, React.CSSProperties> = {
   form: { marginTop: 16, display: 'grid', gap: 12 },
   sectionTitle: { fontSize: 13, fontWeight: 900, color: '#111827', letterSpacing: 0.2, marginTop: 6 },
   label: { display: 'grid', gap: 6, fontSize: 13, fontWeight: 700, color: '#111827' },
+
   input: {
     width: '100%',
     padding: '11px 12px',
     borderRadius: 12,
     border: '1px solid #d1d5db',
     outline: 'none',
-    fontSize: 14,
+    fontSize: 16, // ✅ iOS zoom fix + generally nicer
     background: 'white',
+    boxSizing: 'border-box',
   },
+
+  // ✅ Fix iPhone date spill + keep it inside the box
+  dateInput: {
+    width: '100%',
+    maxWidth: '100%',
+    padding: '11px 12px',
+    borderRadius: 12,
+    border: '1px solid #d1d5db',
+    outline: 'none',
+    fontSize: 16, // iOS zoom fix
+    background: 'white',
+    boxSizing: 'border-box',
+    appearance: 'none',
+    WebkitAppearance: 'none',
+  },
+
   textarea: {
     width: '100%',
     minHeight: 92,
@@ -784,20 +959,30 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 12,
     border: '1px solid #d1d5db',
     outline: 'none',
-    fontSize: 14,
+    fontSize: 16, // ✅ iOS zoom fix
     background: 'white',
     resize: 'vertical',
+    boxSizing: 'border-box',
   },
+
   select: {
     width: '100%',
     padding: '11px 12px',
     borderRadius: 12,
     border: '1px solid #d1d5db',
     outline: 'none',
-    fontSize: 14,
+    fontSize: 16, // ✅ iOS zoom fix
     background: 'white',
+    boxSizing: 'border-box',
   },
-  twoCol: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
+
+  // ✅ Mobile-safe: doesn't force 2 columns on iPhone
+  twoColStack: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 12,
+  },
+
   panel: {
     display: 'grid',
     gap: 10,
@@ -807,6 +992,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'rgba(255,255,255,0.65)',
   },
   hr: { height: 1, background: '#e5e7eb', margin: '6px 0' },
+
   primaryBtn: {
     marginTop: 4,
     border: 'none',
@@ -844,17 +1030,17 @@ const styles: Record<string, React.CSSProperties> = {
   smallNote: { fontSize: 12, color: '#6b7280', marginTop: 4 },
   inlineLink: { color: '#b7280f', fontWeight: 800, textDecoration: 'none' },
   footer: {
-  width: '100%',
-  maxWidth: 720,
-  textAlign: 'center',
-  fontSize: 12,
-  color: 'rgba(255,255,255,0.8)',
-  marginTop: 8,
+    width: '100%',
+    maxWidth: 720,
+    textAlign: 'centre',
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.8)',
+    marginTop: 8,
   },
   loadingWrap: {
     minHeight: '100vh',
     display: 'grid',
-    placeItems: 'center',
+    placeItems: 'centre',
     fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
     background: '#0b0f19',
     color: 'white',
@@ -866,3 +1052,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'rgba(255,255,255,0.06)',
   },
 };
+
+// ✅ Responsive tweak without CSS files:
+// If you want the 2-col grids to stack on small screens, add this quick inline style globally in layout,
+// BUT if you want it only here, easiest is to switch to 1-col on narrow screens via JS.
+// For now, this version keeps your layout but avoids overflow via minmax(0,1fr) + boxSizing.

@@ -8,7 +8,7 @@ type ProfileRow = {
   id: string;
   email: string | null;
   full_name: string | null;
-  role: string | null; // we’re using profiles.role now (since you synced it)
+  role: string | null;
 };
 
 type ClassRow = {
@@ -20,7 +20,7 @@ type StudentDisplay = {
   id: string; // students.id
   user_id: string | null; // profiles.id
   name: string;
-  email: string;
+  email: string; // MUST show
   dob: string | null;
   phone: string | null;
   address: string | null;
@@ -36,10 +36,6 @@ type StudentNote = {
   visible_to_student: boolean;
 };
 
-function safeLowerEmail(v: string) {
-  return String(v || '').trim().toLowerCase();
-}
-
 export default function InstructorDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState('');
@@ -49,20 +45,25 @@ export default function InstructorDashboardPage() {
   const [classes, setClasses] = useState<ClassRow[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({}); // classId -> active count
 
-  const [selectedClassId, setSelectedClassId] = useState<string>('');
-  const [students, setStudents] = useState<StudentDisplay[]>([]);
+  // Expanded class panels: classId -> bool
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Students by class: classId -> StudentDisplay[]
+  const [studentsByClass, setStudentsByClass] = useState<Record<string, StudentDisplay[]>>({});
+  const [loadingStudents, setLoadingStudents] = useState<Record<string, boolean>>({}); // classId -> bool
 
-  // Search (top 5 alphabetical like before)
-  const [studentQuery, setStudentQuery] = useState('');
-
-  // Student modal (read-only)
+  // Student modal (read-only details; notes editable)
   const [showStudentModal, setShowStudentModal] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<StudentDisplay | null>(null);
 
-  // Notes (instructors can add; students can see)
+  // Notes
   const [notes, setNotes] = useState<StudentNote[]>([]);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+
+  // Editing notes
+  const [editingNoteId, setEditingNoteId] = useState<string>('');
+  const [editingText, setEditingText] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -102,17 +103,6 @@ export default function InstructorDashboardPage() {
 
       setProfile(p as ProfileRow);
 
-      /**
-       * IMPORTANT DEBUG/FIX:
-       * In your franchise owner flow you “assigned instructor” as the class.primary_instructor_id,
-       * but your instructor portal is reading instructor_class_assignments.
-       *
-       * So: load classes where:
-       *  A) classes.primary_instructor_id == me
-       *  OR
-       *  B) I have an instructor_class_assignments row.
-       */
-
       // A) Primary instructor classes
       const { data: primaryClasses, error: pcErr } = await supabase
         .from('classes')
@@ -131,7 +121,6 @@ export default function InstructorDashboardPage() {
         .select('class_id, classes:classes(id, name)')
         .eq('instructor_id', user.id);
 
-      // If the assignments table doesn’t exist yet, don’t hard-fail.
       let assignedClasses: ClassRow[] = [];
       if (aErr2) {
         if ((aErr2.message || '').toLowerCase().includes('could not find the table')) {
@@ -169,79 +158,76 @@ export default function InstructorDashboardPage() {
       }
       setCounts(nextCounts);
 
+      // Default: nothing expanded
+      const nextExpanded: Record<string, boolean> = {};
+      finalClasses.forEach(c => (nextExpanded[c.id] = false));
+      setExpanded(nextExpanded);
+
       setLoading(false);
     })();
   }, []);
-
-  // Load students when class selected
-  useEffect(() => {
-    (async () => {
-      setMsg('');
-      setStudents([]);
-      setStudentQuery('');
-      setSelectedStudent(null);
-      setShowStudentModal(false);
-
-      if (!selectedClassId) return;
-
-      // pull profiles for email/name (requires FK students.user_id -> profiles.id)
-      const { data, error } = await supabase
-        .from('students')
-        .select('id, user_id, first_name, last_name, dob, phone, address, status, profiles:profiles(email, full_name)')
-        .eq('home_class_id', selectedClassId);
-
-      if (error) {
-        setMsg(`Students load error: ${error.message}`);
-        return;
-      }
-
-      const mapped: StudentDisplay[] = (data || []).map((r: any) => {
-        const prof = r.profiles || {};
-        const fallbackName = `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim();
-        const name = (String(prof.full_name || '').trim() || fallbackName || '—').trim();
-        const email = String(prof.email || '').trim();
-
-        return {
-          id: r.id,
-          user_id: r.user_id,
-          name,
-          email,
-          dob: r.dob ?? null,
-          phone: r.phone ?? null,
-          address: r.address ?? null,
-          status: r.status ?? null,
-        };
-      });
-
-      // sort for stable “top 5 alphabetical”
-      mapped.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'en', { sensitivity: 'base' }));
-
-      setStudents(mapped);
-    })();
-  }, [selectedClassId]);
 
   async function signOut() {
     await supabase.auth.signOut();
     window.location.href = '/';
   }
 
-  const selectedClassName = useMemo(() => {
-    const c = classes.find(x => x.id === selectedClassId);
-    return c?.name ?? '—';
-  }, [classes, selectedClassId]);
+  async function loadStudentsForClass(classId: string) {
+    // already loaded
+    if (studentsByClass[classId]) return;
 
-  const top5SearchResults = useMemo(() => {
-    const q = studentQuery.trim().toLowerCase();
-    if (!q) return [];
+    setLoadingStudents(prev => ({ ...prev, [classId]: true }));
+    setMsg('');
 
-    const matches = students.filter(s => {
-      const hay = `${s.name} ${s.email}`.toLowerCase();
-      return hay.includes(q);
+    const { data, error } = await supabase
+      .from('students')
+      .select(
+        `
+        id, user_id, first_name, last_name, dob, phone, address, status,
+        profiles:profiles(email, full_name)
+      `
+      )
+      .eq('home_class_id', classId)
+      .order('first_name', { ascending: true });
+
+    setLoadingStudents(prev => ({ ...prev, [classId]: false }));
+
+    if (error) {
+      setMsg(`Students load error: ${error.message}`);
+      return;
+    }
+
+    const mapped: StudentDisplay[] = (data || []).map((r: any) => {
+      const prof = r.profiles || {};
+      const fallbackName = `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim();
+      const name = (String(prof.full_name || '').trim() || fallbackName || '—').trim();
+      const email = String(prof.email || '').trim(); // ensure shown
+
+      return {
+        id: r.id,
+        user_id: r.user_id,
+        name,
+        email,
+        dob: r.dob ?? null,
+        phone: r.phone ?? null,
+        address: r.address ?? null,
+        status: r.status ?? null,
+      };
     });
 
-    matches.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'en', { sensitivity: 'base' }));
-    return matches.slice(0, 5);
-  }, [students, studentQuery]);
+    mapped.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'en', { sensitivity: 'base' }));
+
+    setStudentsByClass(prev => ({ ...prev, [classId]: mapped }));
+  }
+
+  async function toggleClass(classId: string) {
+    const next = !expanded[classId];
+    setExpanded(prev => ({ ...prev, [classId]: next }));
+
+    if (next) {
+      await loadStudentsForClass(classId);
+    }
+  }
 
   async function openStudent(s: StudentDisplay) {
     setMsg('');
@@ -249,12 +235,31 @@ export default function InstructorDashboardPage() {
     setShowStudentModal(true);
     setNotes([]);
     setNoteText('');
+    setEditingNoteId('');
+    setEditingText('');
 
-    // Load notes for this student (visible to instructor)
     const { data, error } = await supabase
       .from('student_notes')
       .select('id, student_id, note, created_by, created_at, visible_to_student')
       .eq('student_id', s.id)
+      .order('created_at', { ascending: false })
+      .limit(25);
+
+    if (error) {
+      setMsg(`Notes load error: ${error.message}`);
+      return;
+    }
+
+    setNotes((data || []) as StudentNote[]);
+  }
+
+  async function refreshOpenStudentNotes() {
+    if (!selectedStudent) return;
+
+    const { data, error } = await supabase
+      .from('student_notes')
+      .select('id, student_id, note, created_by, created_at, visible_to_student')
+      .eq('student_id', selectedStudent.id)
       .order('created_at', { ascending: false })
       .limit(25);
 
@@ -298,9 +303,61 @@ export default function InstructorDashboardPage() {
     }
 
     setNoteText('');
-    await openStudent(selectedStudent); // refresh modal notes
+    await refreshOpenStudentNotes();
     setMsg('Note added ✅');
   }
+
+  function startEditNote(n: StudentNote) {
+    setEditingNoteId(n.id);
+    setEditingText(n.note || '');
+    setMsg('');
+  }
+
+  async function saveEditNote() {
+    if (!editingNoteId) return;
+    const text = editingText.trim();
+    if (!text) {
+      setMsg('Note can’t be empty.');
+      return;
+    }
+
+    setSavingEdit(true);
+    setMsg('');
+
+    // IMPORTANT:
+    // This requires an RLS policy that allows the instructor to update notes they created
+    // OR notes for students in their assigned classes.
+    const { error } = await supabase.from('student_notes').update({ note: text }).eq('id', editingNoteId);
+
+    setSavingEdit(false);
+
+    if (error) {
+      setMsg(`Edit note error: ${error.message}`);
+      return;
+    }
+
+    setEditingNoteId('');
+    setEditingText('');
+    await refreshOpenStudentNotes();
+    setMsg('Note updated ✅');
+  }
+
+  async function deleteNote(noteId: string) {
+    setMsg('');
+
+    // OPTIONAL: allow delete, if you want. If not, remove this function + UI.
+    const { error } = await supabase.from('student_notes').delete().eq('id', noteId);
+
+    if (error) {
+      setMsg(`Delete note error: ${error.message}`);
+      return;
+    }
+
+    await refreshOpenStudentNotes();
+    setMsg('Note deleted ✅');
+  }
+
+  const headerEmail = useMemo(() => profile?.email ?? '—', [profile?.email]);
 
   if (loading) {
     return (
@@ -338,7 +395,7 @@ export default function InstructorDashboardPage() {
             <div>
               <h1 style={styles.h1}>Instructor Dashboard</h1>
               <p style={styles.p}>
-                Signed in as <b>{profile?.email ?? '—'}</b>
+                Signed in as <b>{headerEmail}</b>
               </p>
             </div>
 
@@ -349,7 +406,7 @@ export default function InstructorDashboardPage() {
 
           <div style={styles.divider} />
 
-          {/* Classes */}
+          {/* Classes list (click to expand students) */}
           <div style={styles.innerCard}>
             <div style={styles.sectionTitle}>My Classes</div>
 
@@ -359,90 +416,69 @@ export default function InstructorDashboardPage() {
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
-                <label style={styles.label}>
-                  Choose a class
-                  <select value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)} style={styles.select}>
-                    <option value="">Select…</option>
-                    {classes.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({counts[c.id] ?? 0} active)
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {classes.map(c => {
+                  const isOpen = !!expanded[c.id];
+                  const classStudents = studentsByClass[c.id] || [];
+                  const isLoading = !!loadingStudents[c.id];
 
-                <div style={{ display: 'grid' }}>
-                  {classes.map(c => (
-                    <button
-                      key={c.id}
-                      onClick={() => setSelectedClassId(c.id)}
-                      style={{
-                        ...styles.listRowBtn,
-                        borderColor: selectedClassId === c.id ? 'rgba(185, 28, 28, 0.35)' : '#e5e7eb',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-                        <div style={{ fontWeight: 900 }}>{c.name ?? '—'}</div>
-                        <div style={styles.pill}>{(counts[c.id] ?? 0) + ' active'}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Students + Search (top 5) */}
-          <div style={styles.divider} />
-
-          <div style={styles.innerCard}>
-            <div style={styles.sectionTitle}>Student Search</div>
-
-            {!selectedClassId ? (
-              <div style={styles.muted}>Select a class first.</div>
-            ) : (
-              <div style={{ display: 'grid', gap: 10 }}>
-                <div style={styles.muted}>
-                  Class: <b style={{ color: '#111827' }}>{selectedClassName}</b>
-                </div>
-
-                <input
-                  value={studentQuery}
-                  onChange={e => setStudentQuery(e.target.value)}
-                  placeholder="Search by name or email…"
-                  style={styles.input}
-                />
-
-                {studentQuery.trim() ? (
-                  top5SearchResults.length ? (
-                    <div style={styles.studentList}>
-                      {top5SearchResults.map(s => (
-                        <button
-                          key={s.id}
-                          onClick={() => openStudent(s)}
-                          style={{ ...styles.studentRow, cursor: 'pointer', background: 'transparent', border: 'none', textAlign: 'left' }}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 900, overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</div>
-                            <div style={styles.muted}>{s.email || '—'}</div>
+                  return (
+                    <div key={c.id} style={styles.accordionWrap}>
+                      <button
+                        onClick={() => toggleClass(c.id)}
+                        style={{
+                          ...styles.listRowBtn,
+                          borderColor: isOpen ? 'rgba(185, 28, 28, 0.35)' : '#e5e7eb',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
+                          <div style={{ fontWeight: 900, display: 'flex', gap: 10, alignItems: 'center' }}>
+                            <span style={styles.chev}>{isOpen ? '▾' : '▸'}</span>
+                            <span>{c.name ?? '—'}</span>
                           </div>
+                          <div style={styles.pill}>{(counts[c.id] ?? 0) + ' active'}</div>
+                        </div>
+                      </button>
 
-                          <div style={styles.studentPill}>{s.status ?? '—'}</div>
-                        </button>
-                      ))}
-                      <div style={styles.muted}>Showing top 5 (alphabetical). Refine your search for more.</div>
+                      {isOpen ? (
+                        <div style={styles.accordionBody}>
+                          {isLoading ? (
+                            <div style={styles.muted}>Loading students…</div>
+                          ) : classStudents.length === 0 ? (
+                            <div style={styles.muted}>No students found in this class.</div>
+                          ) : (
+                            <div style={styles.studentList}>
+                              {classStudents.map(s => (
+                                <button
+                                  key={s.id}
+                                  onClick={() => openStudent(s)}
+                                  style={{
+                                    ...styles.studentRowBtn,
+                                  }}
+                                >
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontWeight: 900, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {s.name}
+                                    </div>
+                                    <div style={styles.muted} title={s.email}>
+                                      {s.email || '—'}
+                                    </div>
+                                  </div>
+
+                                  <div style={styles.studentPill}>{s.status ?? '—'}</div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
-                  ) : (
-                    <div style={styles.muted}>No students match that search.</div>
-                  )
-                ) : (
-                  <div style={styles.muted}>Type to search. We’ll show the top 5 results.</div>
-                )}
+                  );
+                })}
               </div>
             )}
           </div>
 
-          {/* Student Modal (read-only + add notes) */}
+          {/* Student Modal (read-only details + editable notes) */}
           {showStudentModal && selectedStudent ? (
             <div
               style={styles.modalOverlay}
@@ -451,12 +487,14 @@ export default function InstructorDashboardPage() {
                 setSelectedStudent(null);
               }}
             >
-              <div style={{ ...styles.modalCard, maxWidth: 720 }} onClick={e => e.stopPropagation()}>
+              <div style={{ ...styles.modalCard, maxWidth: 760 }} onClick={e => e.stopPropagation()}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
                   <div>
                     <div style={{ fontWeight: 950, fontSize: 16 }}>{selectedStudent.name || 'Student'}</div>
-                    <div style={styles.muted}>{selectedStudent.email || '—'}</div>
-                    <div style={styles.muted}>Read-only details. You can add notes (visible to the student).</div>
+                    <div style={styles.muted}>
+                      Email: <b style={{ color: '#111827' }}>{selectedStudent.email || '—'}</b>
+                    </div>
+                    <div style={styles.muted}>Details are read-only. Notes can be added and edited.</div>
                   </div>
 
                   <button
@@ -498,6 +536,7 @@ export default function InstructorDashboardPage() {
 
                 <div style={styles.sectionTitle}>Notes (visible to student)</div>
 
+                {/* Add note */}
                 <label style={styles.label}>
                   Add a note
                   <textarea
@@ -512,19 +551,62 @@ export default function InstructorDashboardPage() {
                   {savingNote ? 'Saving…' : 'Save note'}
                 </button>
 
+                {/* Notes list + edit */}
                 <div style={{ ...styles.studentList, marginTop: 10 }}>
                   {notes.length === 0 ? (
                     <div style={styles.muted}>No notes yet.</div>
                   ) : (
-                    notes.map(n => (
-                      <div key={n.id} style={{ ...styles.studentRow, alignItems: 'flex-start' }}>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 900 }}>{new Date(n.created_at).toLocaleString('en-GB')}</div>
-                          <div style={{ fontSize: 13, color: '#111827', marginTop: 6, whiteSpace: 'pre-wrap' }}>{n.note}</div>
+                    notes.map(n => {
+                      const isEditing = editingNoteId === n.id;
+
+                      return (
+                        <div key={n.id} style={styles.noteCard}>
+                          <div style={styles.noteHeader}>
+                            <div style={{ fontWeight: 900 }}>{new Date(n.created_at).toLocaleString('en-GB')}</div>
+
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              {!isEditing ? (
+                                <button onClick={() => startEditNote(n)} style={styles.smallEditBtn}>
+                                  Edit
+                                </button>
+                              ) : (
+                                <>
+                                  <button onClick={saveEditNote} style={styles.smallPrimaryBtn} disabled={savingEdit}>
+                                    {savingEdit ? 'Saving…' : 'Save'}
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setEditingNoteId('');
+                                      setEditingText('');
+                                      setMsg('');
+                                    }}
+                                    style={styles.smallEditBtn}
+                                    disabled={savingEdit}
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              )}
+
+                              {/* OPTIONAL delete */}
+                              <button onClick={() => deleteNote(n.id)} style={styles.smallDangerBtn}>
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+
+                          {!isEditing ? (
+                            <div style={{ fontSize: 13, color: '#111827', marginTop: 10, whiteSpace: 'pre-wrap' }}>{n.note}</div>
+                          ) : (
+                            <textarea
+                              value={editingText}
+                              onChange={e => setEditingText(e.target.value)}
+                              style={{ ...styles.textarea, marginTop: 10 }}
+                            />
+                          )}
                         </div>
-                        <div style={styles.studentPill}>Note</div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
 
@@ -545,7 +627,7 @@ export default function InstructorDashboardPage() {
 }
 
 /* =========================
-   STYLES
+   STYLES (based on yours)
 ========================= */
 
 const styles: Record<string, React.CSSProperties> = {
@@ -581,39 +663,11 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '28px 18px 40px',
     gap: 14,
   },
-  headerRow: {
-    width: '100%',
-    maxWidth: 860,
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  backAnchor: {
-    textDecoration: 'none',
-    color: 'rgba(255,255,255,0.9)',
-    fontWeight: 700,
-    fontSize: 13,
-    opacity: 0.9,
-  },
-  brandRow: {
-    width: '100%',
-    maxWidth: 860,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    color: 'white',
-    marginTop: 6,
-  },
-  brandTitle: {
-    fontSize: 18,
-    fontWeight: 800,
-    lineHeight: 1.1,
-  },
-  brandSub: {
-    fontSize: 13,
-    opacity: 0.85,
-    marginTop: 2,
-  },
+  headerRow: { width: '100%', maxWidth: 860, display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  backAnchor: { textDecoration: 'none', color: 'rgba(255,255,255,0.9)', fontWeight: 700, fontSize: 13, opacity: 0.9 },
+  brandRow: { width: '100%', maxWidth: 860, display: 'flex', alignItems: 'center', gap: 12, color: 'white', marginTop: 6 },
+  brandTitle: { fontSize: 18, fontWeight: 800, lineHeight: 1.1 },
+  brandSub: { fontSize: 13, opacity: 0.85, marginTop: 2 },
   card: {
     width: '100%',
     maxWidth: 860,
@@ -624,23 +678,9 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: '0 25px 70px rgba(0,0,0,0.35)',
     backdropFilter: 'blur(8px)',
   },
-  cardTopRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: 12,
-    alignItems: 'flex-start',
-  },
-  h1: {
-    margin: 0,
-    fontSize: 24,
-    fontWeight: 900,
-    color: '#111827',
-  },
-  p: {
-    margin: '8px 0 0 0',
-    fontSize: 14,
-    color: '#374151',
-  },
+  cardTopRow: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' },
+  h1: { margin: 0, fontSize: 24, fontWeight: 900, color: '#111827' },
+  p: { margin: '8px 0 0 0', fontSize: 14, color: '#374151' },
   badge: {
     padding: '8px 12px',
     borderRadius: 999,
@@ -651,63 +691,67 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  divider: {
-    height: 1,
-    background: '#e5e7eb',
-    margin: '16px 0',
-  },
-  innerCard: {
-    border: '1px solid #e5e7eb',
-    borderRadius: 16,
-    padding: 16,
-    background: 'white',
-  },
-  sectionTitle: {
-    fontSize: 14,
+  divider: { height: 1, background: '#e5e7eb', margin: '16px 0' },
+  innerCard: { border: '1px solid #e5e7eb', borderRadius: 16, padding: 16, background: 'white' },
+  sectionTitle: { fontSize: 14, fontWeight: 900, letterSpacing: 0.3, marginBottom: 10 },
+  muted: { fontSize: 13, color: '#6b7280' },
+
+  ghostBtn: {
+    borderRadius: 999,
+    padding: '10px 12px',
+    fontSize: 13,
     fontWeight: 900,
-    letterSpacing: 0.3,
-    marginBottom: 10,
+    cursor: 'pointer',
+    color: 'rgba(255,255,255,0.9)',
+    background: 'rgba(255,255,255,0.08)',
+    border: '1px solid rgba(255,255,255,0.18)',
   },
-  muted: {
-    fontSize: 13,
-    color: '#6b7280',
-  },
-  label: {
-    display: 'grid',
-    gap: 6,
-    fontSize: 13,
-    fontWeight: 800,
+
+  listRowBtn: { width: '100%', textAlign: 'left', borderRadius: 12, border: '1px solid #e5e7eb', background: 'white', padding: 12, cursor: 'pointer' },
+  pill: {
+    fontSize: 12,
+    fontWeight: 900,
+    padding: '6px 10px',
+    borderRadius: 999,
+    background: 'rgba(17,24,39,0.06)',
+    border: '1px solid rgba(17,24,39,0.12)',
     color: '#111827',
+    height: 28,
+    display: 'inline-flex',
+    alignItems: 'center',
   },
-  select: {
-    width: '100%',
-    padding: '11px 12px',
+
+  accordionWrap: { border: '1px solid #f0f0f0', borderRadius: 14, overflow: 'hidden', background: 'white' },
+  accordionBody: { padding: 12, borderTop: '1px solid #f2f2f2', background: 'rgba(17,24,39,0.01)' },
+  chev: { width: 18, display: 'inline-block', textAlign: 'center' },
+
+  studentList: { border: '1px solid #eee', borderRadius: 14, padding: 12, background: 'white', display: 'grid', gap: 10 },
+  studentRowBtn: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    border: '1px solid #f2f2f2',
     borderRadius: 12,
-    border: '1px solid #d1d5db',
-    outline: 'none',
-    fontSize: 14,
+    padding: 10,
     background: 'white',
+    cursor: 'pointer',
+    textAlign: 'left',
   },
-  input: {
-    width: '100%',
-    padding: '11px 12px',
-    borderRadius: 12,
-    border: '1px solid #d1d5db',
-    outline: 'none',
-    fontSize: 14,
-    background: 'white',
+  studentPill: {
+    borderRadius: 999,
+    padding: '6px 10px',
+    fontSize: 12,
+    fontWeight: 900,
+    background: 'rgba(17,24,39,0.06)',
+    border: '1px solid rgba(17,24,39,0.08)',
+    whiteSpace: 'nowrap',
   },
-  textarea: {
-    width: '100%',
-    padding: '11px 12px',
-    borderRadius: 12,
-    border: '1px solid #d1d5db',
-    outline: 'none',
-    fontSize: 14,
-    background: 'white',
-    minHeight: 90,
-    resize: 'vertical',
-  },
+
+  label: { display: 'grid', gap: 6, fontSize: 13, fontWeight: 800, color: '#111827' },
+  input: { width: '100%', padding: '11px 12px', borderRadius: 12, border: '1px solid #d1d5db', outline: 'none', fontSize: 14, background: 'white' },
+  textarea: { width: '100%', padding: '11px 12px', borderRadius: 12, border: '1px solid #d1d5db', outline: 'none', fontSize: 14, background: 'white', minHeight: 90, resize: 'vertical' },
+
   primaryBtn: {
     border: 'none',
     borderRadius: 999,
@@ -721,105 +765,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifySelf: 'start',
     marginTop: 8,
   },
-  ghostBtn: {
-    borderRadius: 999,
-    padding: '10px 12px',
-    fontSize: 13,
-    fontWeight: 900,
-    cursor: 'pointer',
-    color: 'rgba(255,255,255,0.9)',
-    background: 'rgba(255,255,255,0.08)',
-    border: '1px solid rgba(255,255,255,0.18)',
-  },
-  listRowBtn: {
-    width: '100%',
-    textAlign: 'left',
-    borderRadius: 12,
-    border: '1px solid #e5e7eb',
-    background: 'white',
-    padding: 12,
-    cursor: 'pointer',
-  },
-  pill: {
-    fontSize: 12,
-    fontWeight: 900,
-    padding: '6px 10px',
-    borderRadius: 999,
-    background: 'rgba(17,24,39,0.06)',
-    border: '1px solid rgba(17,24,39,0.12)',
-    color: '#111827',
-    height: 28,
-    display: 'inline-flex',
-    alignItems: 'center',
-  },
-  alertError: {
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 14,
-    border: '1px solid rgba(185, 28, 28, 0.25)',
-    background: 'rgba(185, 28, 28, 0.08)',
-    color: '#7f1d1d',
-    fontSize: 13,
-    fontWeight: 800,
-  },
-  alertOk: {
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 14,
-    border: '1px solid rgba(16, 185, 129, 0.25)',
-    background: 'rgba(16, 185, 129, 0.08)',
-    color: '#065f46',
-    fontSize: 13,
-    fontWeight: 800,
-  },
-  grid2: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: 10,
-    marginTop: 10,
-  },
-  readonlyField: {
-    border: '1px solid #e5e7eb',
-    borderRadius: 14,
-    padding: 12,
-    background: 'rgba(17,24,39,0.02)',
-  },
-  readonlyLabel: {
-    fontSize: 12,
-    fontWeight: 900,
-    color: '#6b7280',
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  readonlyValue: {
-    fontSize: 14,
-    fontWeight: 900,
-    color: '#111827',
-    wordBreak: 'break-word',
-  },
-  footer: {
-    width: '100%',
-    maxWidth: 860,
-    textAlign: 'center',
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.8)',
-    marginTop: 8,
-  },
-  loadingWrap: {
-    minHeight: '100vh',
-    display: 'grid',
-    placeItems: 'center',
-    fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial',
-    background: '#0b0f19',
-    color: 'white',
-  },
-  loadingCard: {
-    padding: 18,
-    borderRadius: 12,
-    border: '1px solid rgba(255,255,255,0.15)',
-    background: 'rgba(255,255,255,0.06)',
-  },
+
   smallEditBtn: {
     borderRadius: 999,
     padding: '8px 10px',
@@ -832,50 +778,45 @@ const styles: Record<string, React.CSSProperties> = {
     height: 34,
     flexShrink: 0,
   },
-  studentList: {
-    border: '1px solid #eee',
-    borderRadius: 14,
-    padding: 12,
-    background: 'white',
-    display: 'grid',
-    gap: 10,
-  },
-  studentRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-    borderBottom: '1px solid #f2f2f2',
-    paddingBottom: 10,
-  },
-  studentPill: {
+  smallPrimaryBtn: {
     borderRadius: 999,
-    padding: '6px 10px',
+    padding: '8px 10px',
     fontSize: 12,
     fontWeight: 900,
-    background: 'rgba(17,24,39,0.06)',
-    border: '1px solid rgba(17,24,39,0.08)',
-    whiteSpace: 'nowrap',
-    maxWidth: 220,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
+    cursor: 'pointer',
+    color: 'white',
+    background: 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)',
+    border: 'none',
+    height: 34,
   },
-  modalOverlay: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.55)',
-    display: 'grid',
-    placeItems: 'center',
-    zIndex: 50,
-    padding: 16,
+  smallDangerBtn: {
+    borderRadius: 999,
+    padding: '8px 10px',
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: 'pointer',
+    color: '#7f1d1d',
+    background: 'rgba(185, 28, 28, 0.08)',
+    border: '1px solid rgba(185, 28, 28, 0.25)',
+    height: 34,
   },
-  modalCard: {
-    width: '100%',
-    maxWidth: 560,
-    background: 'white',
-    borderRadius: 18,
-    padding: 16,
-    border: '1px solid #eee',
-    boxShadow: '0 25px 70px rgba(0,0,0,0.35)',
-  },
+
+  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 },
+  readonlyField: { border: '1px solid #e5e7eb', borderRadius: 14, padding: 12, background: 'rgba(17,24,39,0.02)' },
+  readonlyLabel: { fontSize: 12, fontWeight: 900, color: '#6b7280', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
+  readonlyValue: { fontSize: 14, fontWeight: 900, color: '#111827', wordBreak: 'break-word' },
+
+  noteCard: { border: '1px solid #eee', borderRadius: 14, padding: 12, background: 'white' },
+  noteHeader: { display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' },
+
+  alertError: { marginTop: 12, padding: 12, borderRadius: 14, border: '1px solid rgba(185, 28, 28, 0.25)', background: 'rgba(185, 28, 28, 0.08)', color: '#7f1d1d', fontSize: 13, fontWeight: 800 },
+  alertOk: { marginTop: 12, padding: 12, borderRadius: 14, border: '1px solid rgba(16, 185, 129, 0.25)', background: 'rgba(16, 185, 129, 0.08)', color: '#065f46', fontSize: 13, fontWeight: 800 },
+
+  footer: { width: '100%', maxWidth: 860, textAlign: 'center', fontSize: 12, color: 'rgba(255,255,255,0.8)', marginTop: 8 },
+
+  loadingWrap: { minHeight: '100vh', display: 'grid', placeItems: 'center', fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial', background: '#0b0f19', color: 'white' },
+  loadingCard: { padding: 18, borderRadius: 12, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.06)' },
+
+  modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'grid', placeItems: 'center', zIndex: 50, padding: 16 },
+  modalCard: { width: '100%', maxWidth: 560, background: 'white', borderRadius: 18, padding: 16, border: '1px solid #eee', boxShadow: '0 25px 70px rgba(0,0,0,0.35)' },
 };

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
 import Link from 'next/link';
 import { supabase } from '../../lib/supabaseClient';
 
@@ -259,7 +259,7 @@ export default function PrimaryDashboardPage() {
               <div style={styles.infoRow}>
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={styles.infoLabel}>Account type</div>
-                  <div style={styles.infoValue}>{isParent ? 'parent' : isStudent ? 'student' : (profile?.role ?? '—')}</div>
+                  <div style={styles.infoValue}>{isParent ? 'parent' : isStudent ? 'student' : profile?.role ?? '—'}</div>
                 </div>
               </div>
 
@@ -290,14 +290,12 @@ export default function PrimaryDashboardPage() {
                     <PrimaryStudentInline
                       title="My membership"
                       student={primaryStudent}
-                      onStudentPatched={(patch) => setPrimaryStudent(prev => (prev ? { ...prev, ...patch } : prev))}
+                      onStudentPatched={patch => setPrimaryStudent(prev => (prev ? { ...prev, ...patch } : prev))}
                     />
                   ) : (
                     <div style={styles.muted}>
                       We couldn’t find a student record linked to this account yet.
-                      <div style={{ marginTop: 6 }}>
-                        If you’ve just registered, it may not have saved or RLS blocked the insert.
-                      </div>
+                      <div style={{ marginTop: 6 }}>If you’ve just registered, it may not have saved or RLS blocked the insert.</div>
                     </div>
                   )}
                 </div>
@@ -312,9 +310,7 @@ export default function PrimaryDashboardPage() {
             <div style={styles.cardTopRow}>
               <div>
                 <div style={styles.sectionTitle}>My children</div>
-                <div style={styles.muted}>
-                  {children.length ? 'Select a child to view and manage their details.' : 'No children linked to this account yet.'}
-                </div>
+                <div style={styles.muted}>{children.length ? 'Select a child to view and manage their details.' : 'No children linked to this account yet.'}</div>
               </div>
 
               <button onClick={() => setShowAddChild(true)} style={styles.primaryBtn}>
@@ -325,9 +321,7 @@ export default function PrimaryDashboardPage() {
             <div style={styles.divider} />
 
             {children.length === 0 ? (
-              <div style={styles.muted}>
-                If you expected children here, it can mean the student rows didn’t save, or RLS blocked inserts.
-              </div>
+              <div style={styles.muted}>If you expected children here, it can mean the student rows didn’t save, or RLS blocked inserts.</div>
             ) : (
               <div style={{ display: 'grid', gap: 10 }}>
                 {children.map(k => (
@@ -344,9 +338,7 @@ export default function PrimaryDashboardPage() {
                       <div style={styles.pill}>{k.status ?? '—'}</div>
                     </div>
 
-                    <div style={{ ...styles.muted, marginTop: 6 }}>
-                      DOB: {k.dob ? String(k.dob).slice(0, 10) : '—'}
-                    </div>
+                    <div style={{ ...styles.muted, marginTop: 6 }}>DOB: {k.dob ? String(k.dob).slice(0, 10) : '—'}</div>
                   </button>
                 ))}
               </div>
@@ -362,9 +354,7 @@ export default function PrimaryDashboardPage() {
                 <div style={styles.cardTopRow}>
                   <div>
                     <div style={styles.sectionTitle}>Child details</div>
-                    <div style={styles.subTitle}>
-                      {(`${selectedChild.first_name ?? ''} ${selectedChild.last_name ?? ''}`.trim() || '—')}
-                    </div>
+                    <div style={styles.subTitle}>{(`${selectedChild.first_name ?? ''} ${selectedChild.last_name ?? ''}`.trim() || '—')}</div>
                     <div style={styles.muted}>You can update contact details, medical info, and change their registered class.</div>
                   </div>
 
@@ -378,13 +368,13 @@ export default function PrimaryDashboardPage() {
                 <PrimaryStudentView
                   studentId={selectedChild.id}
                   canChangeClass
-                  onStudentPatched={(patch) => {
+                  onStudentPatched={patch => {
                     setSelectedChild(prev => (prev ? { ...prev, ...patch } : prev));
                     setChildren(prev => prev.map(s => (s.id === selectedChild.id ? { ...s, ...patch } : s)));
                   }}
                 />
 
-                <div style={{ marginTop: 14, textAlign: 'centre' as any }}>
+                <div style={{ marginTop: 14, textAlign: 'center' }}>
                   <Link href="/dashboard" style={{ ...styles.muted, textDecoration: 'none' }}>
                     Back to main dashboard
                   </Link>
@@ -410,7 +400,7 @@ export default function PrimaryDashboardPage() {
           setChildForm={setChildForm}
           addingChild={addingChild}
           setAddingChild={setAddingChild}
-          onChildCreated={(newChild) => {
+          onChildCreated={newChild => {
             setChildren(prev => {
               const next = [...prev, newChild];
               next.sort((a, b) => (a.first_name ?? '').localeCompare(b.first_name ?? '', 'en', { sensitivity: 'base' }));
@@ -438,7 +428,6 @@ function PrimaryStudentInline({
   student: StudentRow;
   onStudentPatched: (patch: Partial<StudentRow>) => void;
 }) {
-  // We reuse PrimaryStudentView UI but keep it compact: render the view directly by id
   return (
     <div style={styles.innerCard2}>
       <div style={styles.sectionTitle}>{title}</div>
@@ -474,8 +463,8 @@ function AddChildModal({
     medical_info: string;
     home_class_id: string;
   };
-  setChildForm: React.Dispatch<
-    React.SetStateAction<{
+  setChildForm: Dispatch<
+    SetStateAction<{
       first_name: string;
       last_name: string;
       dob: string;
@@ -502,8 +491,6 @@ function AddChildModal({
         setLocalMsg('');
         setLoadingClasses(true);
 
-        // You said: they can change their registered class (not franchise area).
-        // So we load *active* classes and let them pick. Franchise is derived from class.franchise_id.
         const { data: cl, error: clErr } = await supabase
           .from('classes')
           .select('id, name, day_of_week, start_time, end_time, location, franchise_id, is_active')
@@ -514,7 +501,7 @@ function AddChildModal({
         if (clErr) throw clErr;
         if (cancelled) return;
 
-        setClasses((cl || []) as any);
+        setClasses((cl || []) as ClassRow[]);
         setLoadingClasses(false);
       } catch (e: any) {
         if (cancelled) return;
@@ -560,7 +547,7 @@ function AddChildModal({
 
       // derive franchise from class
       const chosen = classes.find(c => c.id === childForm.home_class_id);
-      const franchise_id = (chosen as any)?.franchise_id ?? null;
+      const franchise_id = chosen?.franchise_id ?? null;
 
       const insertPayload: any = {
         parent_user_id: parentId,
@@ -575,8 +562,7 @@ function AddChildModal({
         address: childForm.address.trim() || null,
         medical_info: childForm.medical_info.trim() || null,
 
-        // If your schema has these guardian fields, setting them is helpful; if not present, Supabase will error.
-        // Comment out these lines if your "students" table doesn't have these columns.
+        // If your schema has these guardian fields, keep them. If not, remove them.
         guardian_is_registering: true,
         guardian_name: (profile?.full_name ?? '').trim() || null,
         guardian_relationship: 'Parent/Guardian',
@@ -657,12 +643,7 @@ function AddChildModal({
 
           <label style={styles.label}>
             Class
-            <select
-              value={childForm.home_class_id}
-              onChange={e => setChildForm({ ...childForm, home_class_id: e.target.value })}
-              style={styles.select}
-              disabled={loadingClasses}
-            >
+            <select value={childForm.home_class_id} onChange={e => setChildForm({ ...childForm, home_class_id: e.target.value })} style={styles.select} disabled={loadingClasses}>
               <option value="">{loadingClasses ? 'Loading classes…' : 'Select a class…'}</option>
               {classes.map(c => (
                 <option key={c.id} value={c.id}>
@@ -806,7 +787,7 @@ function PrimaryStudentView({
             .select('id, name, day_of_week, start_time, end_time, location, franchise_id')
             .eq('id', s.home_class_id)
             .single();
-          if (!hcErr) setHomeClass(hc as any);
+          if (!hcErr) setHomeClass(hc as ClassRow);
         } else {
           setHomeClass(null);
         }
@@ -820,7 +801,7 @@ function PrimaryStudentView({
           .order('start_time', { ascending: true });
 
         if (clErr) throw clErr;
-        setClasses((cl || []) as any);
+        setClasses((cl || []) as ClassRow[]);
 
         // Belt history
         const { data: br, error: brErr } = await supabase
@@ -940,7 +921,7 @@ function PrimaryStudentView({
 
         if (newClassId) {
           const chosen = classes.find(c => c.id === newClassId);
-          const derivedFranchiseId = (chosen as any)?.franchise_id ?? null;
+          const derivedFranchiseId = chosen?.franchise_id ?? null;
           patch.franchise_id = derivedFranchiseId;
         }
       }
@@ -954,7 +935,7 @@ function PrimaryStudentView({
       // refresh class + franchise display bits
       if (patch.franchise_id) {
         const { data: fr } = await supabase.from('franchises').select('id, name').eq('id', patch.franchise_id).maybeSingle();
-        if (fr) setFranchise(fr as any);
+        if (fr) setFranchise(fr as FranchiseRow);
       }
 
       if (patch.home_class_id) {
@@ -963,7 +944,7 @@ function PrimaryStudentView({
           .select('id, name, day_of_week, start_time, end_time, location, franchise_id')
           .eq('id', patch.home_class_id)
           .maybeSingle();
-        if (hc) setHomeClass(hc as any);
+        if (hc) setHomeClass(hc as ClassRow);
       } else {
         setHomeClass(null);
       }
@@ -989,13 +970,7 @@ function PrimaryStudentView({
         <div style={styles.sectionTitle}>Profile</div>
 
         <div style={styles.profileTopRow}>
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            style={styles.avatarButton}
-            aria-label="Change profile photo"
-            title="Change photo"
-          >
+          <button type="button" onClick={() => fileRef.current?.click()} style={styles.avatarButton} aria-label="Change profile photo" title="Change photo">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             {avatarUrl ? <img src={avatarUrl} alt="Student profile" style={styles.avatarImg as any} /> : <div style={styles.muted}>Add</div>}
             <div style={styles.avatarEditBadge}>✎</div>
@@ -1070,13 +1045,7 @@ function PrimaryStudentView({
           {!editMode ? (
             <div style={styles.infoValue}>{student.medical_info || '—'}</div>
           ) : (
-            <textarea
-              value={form.medical_info}
-              onChange={e => setForm({ ...form, medical_info: e.target.value })}
-              style={styles.textarea}
-              rows={4}
-              placeholder="Add any medical notes here…"
-            />
+            <textarea value={form.medical_info} onChange={e => setForm({ ...form, medical_info: e.target.value })} style={styles.textarea} rows={4} placeholder="Add any medical notes here…" />
           )}
         </div>
 
@@ -1138,13 +1107,7 @@ function PrimaryStudentView({
         {belts.length === 0 ? <div style={styles.muted}>No belt records yet.</div> : null}
 
         {belts.map((b, idx) => (
-          <div
-            key={b.id}
-            style={{
-              ...styles.beltRow,
-              borderBottom: idx === belts.length - 1 ? 'none' : '1px solid #eee',
-            }}
-          >
+          <div key={b.id} style={{ ...styles.beltRow, borderBottom: idx === belts.length - 1 ? 'none' : '1px solid #eee' }}>
             <div style={{ fontWeight: 900 }}>{b.belt_name || '—'}</div>
             <div style={styles.muted}>Awarded: {b.awarded_on ? String(b.awarded_on).slice(0, 10) : '—'}</div>
           </div>
@@ -1160,13 +1123,7 @@ function PrimaryStudentView({
         {notes.length === 0 ? <div style={styles.muted}>No feedback notes yet.</div> : null}
 
         {notes.map((n, idx) => (
-          <div
-            key={n.id}
-            style={{
-              ...styles.noteRow,
-              borderBottom: idx === notes.length - 1 ? 'none' : '1px solid #eee',
-            }}
-          >
+          <div key={n.id} style={{ ...styles.noteRow, borderBottom: idx === notes.length - 1 ? 'none' : '1px solid #eee' }}>
             <div style={styles.noteTopRow}>
               <div style={{ fontWeight: 900 }}>Note</div>
               <div style={styles.noteDate}>{formatDate(n.created_at)}</div>
@@ -1183,7 +1140,7 @@ function PrimaryStudentView({
    STYLES (reused)
 ========================= */
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
   page: { minHeight: '100vh', position: 'relative', overflow: 'hidden', fontFamily: 'system-ui', color: '#111827' },
   bg: {
     position: 'absolute',
@@ -1194,8 +1151,7 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: 'absolute',
     inset: 0,
-    background:
-      'radial-gradient(1200px circle at 20% 10%, rgba(220, 38, 38, 0.25), transparent 50%), rgba(0,0,0,0.45)',
+    background: 'radial-gradient(1200px circle at 20% 10%, rgba(220, 38, 38, 0.25), transparent 50%), rgba(0,0,0,0.45)',
   },
   container: {
     position: 'relative',
@@ -1203,7 +1159,7 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: '100vh',
     display: 'grid',
     alignContent: 'start',
-    justifyItems: 'centre',
+    justifyItems: 'center',
     padding: '28px 18px 40px',
     gap: 14,
   },
@@ -1220,7 +1176,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid rgba(255,255,255,0.18)',
   },
 
-  brandRow: { width: '100%', maxWidth: 860, display: 'flex', alignItems: 'centre', gap: 12, color: 'white', marginTop: 6 },
+  brandRow: { width: '100%', maxWidth: 860, display: 'flex', alignItems: 'center', gap: 12, color: 'white', marginTop: 6 },
   brandTitle: { fontSize: 18, fontWeight: 800, lineHeight: 1.1 },
   brandSub: { fontSize: 13, opacity: 0.85, marginTop: 2 },
 
@@ -1270,10 +1226,10 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#111827',
     height: 28,
     display: 'inline-flex',
-    alignItems: 'centre',
+    alignItems: 'center',
   },
 
-  profileTopRow: { display: 'flex', gap: 14, alignItems: 'centre', flexWrap: 'wrap' },
+  profileTopRow: { display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' },
   nameTitle: { fontSize: 16, fontWeight: 950, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 
   avatarButton: {
@@ -1284,7 +1240,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #e5e7eb',
     background: 'rgba(17,24,39,0.03)',
     display: 'grid',
-    placeItems: 'centre',
+    placeItems: 'center',
     position: 'relative',
     cursor: 'pointer',
     padding: 0,
@@ -1301,7 +1257,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'rgba(255,255,255,0.95)',
     border: '1px solid rgba(17,24,39,0.15)',
     display: 'grid',
-    placeItems: 'centre',
+    placeItems: 'center',
     fontSize: 12,
     fontWeight: 900,
     color: '#111827',
@@ -1338,8 +1294,8 @@ const styles: Record<string, React.CSSProperties> = {
   alertError: { marginTop: 12, padding: 12, borderRadius: 14, border: '1px solid rgba(185, 28, 28, 0.25)', background: 'rgba(185, 28, 28, 0.08)', color: '#7f1d1d', fontSize: 13, fontWeight: 800 },
   alertOk: { marginTop: 12, padding: 12, borderRadius: 14, border: '1px solid rgba(16, 185, 129, 0.25)', background: 'rgba(16, 185, 129, 0.08)', color: '#065f46', fontSize: 13, fontWeight: 800 },
 
-  footer: { width: '100%', maxWidth: 860, textAlign: 'centre' as any, fontSize: 12, color: 'rgba(255,255,255,0.8)', marginTop: 8 },
-  loadingWrap: { minHeight: '100vh', display: 'grid', placeItems: 'centre', fontFamily: 'system-ui', background: '#0b0f19', color: 'white' },
+  footer: { width: '100%', maxWidth: 860, textAlign: 'center', fontSize: 12, color: 'rgba(255,255,255,0.8)', marginTop: 8 },
+  loadingWrap: { minHeight: '100vh', display: 'grid', placeItems: 'center', fontFamily: 'system-ui', background: '#0b0f19', color: 'white' },
   loadingCard: { padding: 18, borderRadius: 12, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.06)' },
 
   modalOverlay: {
@@ -1347,7 +1303,7 @@ const styles: Record<string, React.CSSProperties> = {
     inset: 0,
     background: 'rgba(0,0,0,0.55)',
     display: 'grid',
-    placeItems: 'centre',
+    placeItems: 'center',
     zIndex: 50,
     padding: 16,
   },
